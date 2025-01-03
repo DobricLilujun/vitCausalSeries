@@ -1,0 +1,5 @@
+data/
+output_all_times/
+output_patches/
+*__pycache__/
+.vscode/
