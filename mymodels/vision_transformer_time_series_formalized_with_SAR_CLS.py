@@ -59,6 +59,8 @@ class Classifier(nn.Module):
 
         # Final classification output
         x = self.conv5(x)
+        # Apply softmax to convert logits to probabilities
+        x = torch.softmax(x, dim=1)  # Apply softmax along the class dimension
         return x
 
 
