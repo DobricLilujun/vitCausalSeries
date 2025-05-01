@@ -1,15 +1,9 @@
-"""
-Copyright (c) Facebook, Inc. and its affiliates.
-
-This source code is licensed under the MIT license found in the
-LICENSE file in the root directory of this source tree.
-"""
-
 import contextlib
 from typing import Optional, Sequence, Tuple, Union, Dict, Any
 
 import numpy as np
 import torch
+from scipy.ndimage import gaussian_filter
 
 
 @contextlib.contextmanager
@@ -147,7 +141,6 @@ class RandomMaskFunc(MaskFunc):
         return mask
 
 
-from scipy.ndimage import gaussian_filter
 
 
 class RealisticCloudMaskFunc(MaskFunc):

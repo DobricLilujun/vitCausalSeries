@@ -760,6 +760,7 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
 
     def seq2img(self, x, img_size):
         """
+        feature2img: 
         Transforms sequence back into image space, input dims: [batch_size, num_patches, channels]
         output dims: [batch_size, channels, H, W]
         """
