@@ -697,7 +697,7 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
             num_patches = (
                 (img_size[0] // self.patch_size[0])
                 * (img_size[1] // self.patch_size[1])
-                * (self.in_chans // in_chans)   # 11 -> in_chans
+                * (self.in_chans // in_chans)  # 11 -> in_chans
             )
 
         dpr = [
@@ -750,11 +750,15 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
         self.feature_info = [dict(num_chs=embed_dim, reduction=0, module="head")]
         if not self.is_CSA:
             self.head = nn.Linear(
-                self.num_features, self.out_chans * self.patch_size[0] * self.patch_size[1]
+                self.num_features,
+                self.out_chans * self.patch_size[0] * self.patch_size[1],
             )
         else:
             self.head = nn.Linear(
-                self.num_features, self.out_chans * self.patch_size[0] * self.patch_size[1]  #11 -> in_chans
+                self.num_features,
+                self.out_chans
+                * self.patch_size[0]
+                * self.patch_size[1],  # 11 -> in_chans
             )
 
         max_seq_len = 1025
@@ -764,7 +768,7 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
 
     def seq2img(self, x, img_size, input_channel=1):
         """
-        feature2img: 
+        feature2img:
         Transforms sequence back into image space, input dims: [batch_size, num_patches, channels]
         output dims: [batch_size, channels, H, W]
         """
