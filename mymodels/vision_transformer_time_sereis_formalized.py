@@ -591,23 +591,35 @@ class Block(nn.Module):
 
         return x
 
+class TubeletEmbed(nn.Module):
+    def __init__(self, chans_num_per=11, embed_dim=64, patch_size=5, Kt=2, St=2):
+        super().__init__()
+        self.proj = nn.Conv3d(
+            in_channels=chans_num_per, out_channels=embed_dim,
+            kernel_size=(Kt, patch_size, patch_size),
+            stride=(St, patch_size, patch_size),
+            padding=(0, 0, 0), bias=True
+        )
+    def forward(self, x):  # x: [B, C=11, T, H, W]
+        return self.proj(x)  # [B, E, T', H', W']，其中 T' = floor((T - Kt)/St + 1)
 
+    
 class PatchEmbedTimeSeries(nn.Module):
     """
     Time-Series Patch Embedding for multichannel input where temporal dimension is embedded as separate time slices.
     Converts the input image sequence into patch embeddings using a Conv2D layer.
     """
 
-    def __init__(self, patch_size, in_chans, embed_dim, time_span=3):
+    def __init__(self, patch_size, in_chans, embed_dim, time_span=6):
         super().__init__()
         # Number of channels per time step
-        self.conv_input_channel = in_chans // time_span
-        self.time_span = time_span
+        self.conv_input_channel = in_chans // time_span # 11
+        self.time_span = time_span # 6
 
         # Convolution to extract non-overlapping patches from each time slice
         self.proj = nn.Conv2d(
             self.conv_input_channel,
-            embed_dim,
+            embed_dim,   # embed_dim // 6
             kernel_size=patch_size,
             stride=patch_size,
         )
@@ -622,10 +634,10 @@ class PatchEmbedTimeSeries(nn.Module):
         ), "Total channels must be divisible by the number of time steps (T)."
 
         # Reshape input: split temporal channels into separate time steps
-        x = x.view(B, self.time_span, self.conv_input_channel, H, W)
+        x = x.view(B, self.time_span, self.conv_input_channel, H, W)  # (B,T,11,H,W)
 
         # Merge batch and time dimension to apply convolution to each time step
-        x = x.view(B * self.time_span, self.conv_input_channel, H, W)
+        x = x.view(B * self.time_span, self.conv_input_channel, H, W) #(B*T,11,H,W)
 
         # Extract patch embeddings
         x = self.proj(x)
@@ -710,7 +722,7 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
         self,
         avrg_img_size=320,  # Average image size used to compute spatial dimensions
         patch_size=10,  # Size of each patch
-        in_chans=1,  # Number of input channels (e.g., for grayscale = 1)
+        in_chans=1,  # Number of input total channels (e.g., for grayscale = 1)
         embed_dim=64,  # Embedding dimension per head
         depth=8,  # Number of transformer blocks
         num_heads=9,  # Number of attention heads
@@ -733,6 +745,8 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
         is_SPT=False,  # Whether to use Shifted Patch Tokenization
         is_CSA=False,  # Whether to use Channel Self-Attention (for time-series)
         rotary_position_emb=False,  # Whether to use rotary positional embeddings
+        chans_num_per = 11,  # channels per image
+        time_span = 6
     ):
         super().__init__()
         self.depth = depth
@@ -759,7 +773,8 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
             self.patch_size = patch_size
 
         self.in_chans = in_chans  # Number of input channels  = Original image channels number * time span = 11 * 6 For example
-
+        self.chans_num_per = chans_num_per
+        self.time_span = time_span
         # Module to decode patches back to time series (used later in output) Not used in our paper
         # self.PatchDeodceTimeSeries = PatchDecodeTimeSeries(
         #     patch_size, in_chans, embed_dim, time_span=6
@@ -767,17 +782,27 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
 
         # Patch embedding layer selection based on SPT and CSA flags
         if not is_SPT:
-            if not is_CSA:
+            # if not is_CSA:
+            if not use_time_embed:
                 # Standard patch embedding using Conv2D
                 self.patch_embed = PatchEmbed(
-                    patch_size=self.patch_size, in_chans=in_chans, embed_dim=embed_dim
+                    patch_size=self.patch_size, in_chans=self.in_chans, embed_dim=embed_dim
                 )
             else:
-                self.patch_embed = PatchEmbedTimeSeries(
-                    patch_size=self.patch_size,
-                    in_chans=in_chans,
-                    embed_dim=embed_dim,
-                    time_span=in_chans // 11,
+                # self.patch_embed_pos = PatchEmbed(
+                #     patch_size=self.patch_size, in_chans=embed_dim*6, embed_dim=embed_dim
+                # )
+                # self.patch_embed_tim = PatchEmbedTimeSeries(
+                #     patch_size=self.patch_size,
+                #     in_chans=self.in_chans,
+                #     embed_dim=self.embed_dim, #self.in_chans // 6, #// 6
+                #     time_span=self.in_chans // 11,
+                # )
+                # self.patch_embed = PatchEmbed(
+                #     patch_size=1, in_chans=self.embed_dim*5, embed_dim=embed_dim # // 6
+                # )
+                self.patch_embed = TubeletEmbed(
+                     chans_num_per=self.chans_num_per, embed_dim=embed_dim, patch_size=self.patch_size[0], Kt=2, St=2
                 )
         else:
             self.patch_embed = ShiftedPatchTokenization(
@@ -799,14 +824,42 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
             trunc_normal_(self.pos_embed, std=0.02)
 
         # Learnable temporal embedding (if enabled) Not used in our paper
-        # if self.use_time_embed:
-        #     self.time_embed = nn.Parameter(
-        #         torch.zeros(
-        #             1,
-        #             embed_dim,
-        #             self.in_chans // 11,
-        #         )
-        #     )
+        if self.use_time_embed:
+            # self.time_embed = nn.Parameter(
+            #     torch.zeros(
+            #         1,
+            #         embed_dim,
+            #         self.in_chans // 11,
+            #     )
+            # )
+            # 将时间嵌入改为“时间步索引 -> 向量”的可学习表，形状为 (T_max, E)
+            # 最小改动：复用你原先的 self.in_chans // 11 作为 T_max（CSA 场景下的帧数上限）
+            # trunc_normal_(self.pos_embed, std=0.02)
+            self.tubelet_embed = nn.Parameter(
+                torch.zeros(
+                    1,
+                    embed_dim,
+                    3,
+                    img_size[0] // self.patch_size[0],
+                    img_size[1] // self.patch_size[1],
+                )
+            )
+            trunc_normal_(self.tubelet_embed, std=0.02)
+            self.pos_embed = nn.Parameter(
+                torch.zeros(
+                    1,
+                    embed_dim,
+                    img_size[0] // self.patch_size[0],
+                    img_size[1] // self.patch_size[1],
+                )
+            )
+            trunc_normal_(self.pos_embed, std=0.02)
+            # self.T_max = max(1, int(self.in_chans // 11))
+            # # self.time_embed = nn.Embedding(self.T_max, embed_dim)
+            # # self.time_embed = nn.Embedding(self.T_max, self.chans_num)
+            # self.time_embed = nn.Embedding(self.T_max, embed_dim)
+            # trunc_normal_(self.time_embed.weight, std=0.005)
+
 
         # Compute number of patches
         if not is_CSA:
@@ -814,12 +867,14 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
                 img_size[1] // self.patch_size[1]
             )
         else:
-            num_patches = (
-                (img_size[0] // self.patch_size[0])
-                * (img_size[1] // self.patch_size[1])
-                * (self.in_chans // 11)
-            )
-
+            # num_patches = (
+            #     (img_size[0] // self.patch_size[0])
+            #     * (img_size[1] // self.patch_size[1])
+            #     * (self.in_chans // 11)
+            # )
+            num_patches = (img_size[0] // self.patch_size[0]) * (
+                            img_size[1] // self.patch_size[1]
+                        )
         # Create drop path schedule for each transformer block
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
 
@@ -868,14 +923,18 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
         self.norm = norm_layer(embed_dim)
 
         # Define output head
-        self.feature_info = [dict(num_chs=embed_dim, reduction=0, module="head")]
+        # self.feature_info = [dict(num_chs=embed_dim, reduction=0, module="head")]
         if not self.is_CSA:
             self.head = nn.Linear(
-                self.num_features, in_chans * self.patch_size[0] * self.patch_size[1]
+                self.num_features, 66 * self.patch_size[0] * self.patch_size[1]
             )
         else:
             self.head = nn.Linear(
                 self.num_features, 11 * self.patch_size[0] * self.patch_size[1]
+            )
+        if self.use_time_embed:
+            self.head = nn.Linear(
+                self.num_features*3, 66 * self.patch_size[0] * self.patch_size[1]
             )
 
         # Positional embedding for each transformer layer (if rotary encoding is used)
@@ -895,7 +954,8 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
             x = x.view(
                 x.shape[0],
                 x.shape[1],
-                self.in_chans,
+                # self.in_chans,
+                66,
                 self.patch_size[0],
                 self.patch_size[1],
             )
@@ -985,50 +1045,61 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
     def forward_features(self, x):
         # Get the batch size (B), number of channels (C), height (H), and width (W) of the input tensor
         B, C, H, W = x.shape
-
         # Apply patch embedding to the input tensor
-        x = self.patch_embed(x)  # (B_T, conv_input_channel, H, W)
-
-        # Check if positional embedding is to be used
-        if self.use_pos_embed:
-            if not self.is_CSA:
-                # For non-CSA cases, get the dimensions of the embedded tensor
-                _, _, H, W = x.shape  # B, E_dim, H, W
-
-                # Interpolate the positional embedding to match the spatial size of the input
-                pos_embed = F.interpolate(
-                    self.pos_embed, size=[H, W], mode="bilinear", align_corners=False
+        if self.use_time_embed:
+            # print('here')
+            T = C // self.chans_num_per
+            x = x.view(B, self.chans_num_per, T, H, W)
+            # print('check x size', x.shape)
+            x = self.patch_embed(x)
+            # print('check x size', x.shape)
+            # 在 E 维注入 time embedding（对 T_out 步）
+            B, E, Tp, Hp, Wp = x.shape
+            tubelet_bias_resized  = F.interpolate(
+                    self.tubelet_embed, size=[Tp, Hp, Wp], mode="trilinear", align_corners=False
                 )
+            # print('check tubelet size', tubelet_bias_resized.shape)
+            # Add the tubelet embedding to the input tensor
+            tubelet_bias_resized = tubelet_bias_resized
+            x = x + tubelet_bias_resized
+            # print('check x size', x.shape)
+            # B, C, H_p, W_p = x.shape
+            # T = C // self.chans_num
+            # # print('T:', T)
+            # # x: [B, T, E_dim, H_p, W_p]
+            # x = x.view(B, T, self.chans_num, H_p, W_p)
+            # # print('check x size', x.shape)
+            # t_ids = torch.arange(T, device=x.device)          # [T]
+            # t_vec = self.time_embed(t_ids)                    # [T, E_dim]
+            # x = x + 0.5*t_vec.view(1, T, self.chans_num, 1, 1)       # 对空间与 batch 广播
+            # x = x.view(B, T*self.chans_num, H_p, W_p)
 
-                # Add the positional embedding to the input tensor
-                x = x + pos_embed
-            else:
-                #### To be fixed  ####
-                # For CSA (possibly temporal dimension), get the dimensions of the tensor
-                B_T, E_dim, H_p, W_p = x.shape
-                T = B_T // B  # Determine the time steps (T)
+        # print('check x size', x.shape)
+        # x = self.patch_embed(x)  # (B_T, conv_input_channel, H, W)
 
-                # Repeat the positional embedding across the batch and time dimension
-                pos_embed = self.pos_embed.repeat(
-                    B_T, 1, 1, 1
-                )  # (B_T, E_dim, H_p, W_p)
+        # print('check x size', x.shape)
+        # Check if positional embedding is to be used
+        elif self.use_pos_embed:
+            # if not self.is_CSA:
+            x = self.patch_embed(x)
+            # For non-CSA cases, get the dimensions of the embedded tensor
+            _, _, H, W = x.shape  # B, E_dim, H, W 15 66 36 36
 
-                # Add the repeated positional embedding to the input tensor
-                x = x + pos_embed
+            # Interpolate the positional embedding to match the spatial size of the input
+            pos_embed = F.interpolate(
+                self.pos_embed, size=[H, W], mode="bilinear", align_corners=False
+            )
 
-                # Optional code for adding temporal embeddings (currently commented out)
-                # if self.use_time_embed:
-                #     time_embed = self.time_embed.expand(B, -1, -1)
-                #     time_embed_expanded = time_embed.unsqueeze(-1).unsqueeze(-1)
-                #     time_embed_expanded = time_embed_expanded.expand(-1, -1, -1, W, W)
-                #     time_embed_expanded = time_embed_expanded.reshape(B, E_dim, T_H, W)
-                #     x = x + time_embed_expanded
+            # Add the positional embedding to the input tensor
+            x = x + pos_embed
 
         # Flatten the input tensor and transpose it for further processing
-        x = x.flatten(2).transpose(1, 2)  # (B_T, seq_len, E_dim)
-
+        x = x.flatten(2).transpose(1, 2)  # (B_T, seq_len, E_dim), seq_len = H*W
+        # print('check x size', x.shape)
+        # print('check begin', x.shape)
         # Apply dropout to the positional embeddings
         x = self.pos_drop(x)
+        # print('check x size', x.shape)
         # Apply layer-specific positional embedding if available
         if self.layer_pos_emb is not None:
             layer_pos_emb = self.layer_pos_emb(x)
@@ -1038,27 +1109,44 @@ class VisionTransformerTimeSeriesFormalized(nn.Module):
         # Pass the tensor through each block in the model
         for u, blk in enumerate(self.blocks):
             # Apply the block with positional embeddings (if available)
-            x = blk(x, (W, W), pos_emb=layer_pos_emb)
-
+            x = blk(x, (W, W), pos_emb=layer_pos_emb)   # (W,W) is not used
+        # print('check x size', x.shape)
         # Apply the final normalization layer
         x = self.norm(x)
+        # print('check x size', x.shape)
         # Return the processed tensor
         return x
 
     def forward(self, x):
         # Get the batch size (B), number of channels (C), height (H), and width (W) of the input tensor
-        _, _, H, W = x.shape  # B, C, H, W
-
+        B, _, H, W = x.shape  # B, C, H, W
+        H_p, W_p = H // self.patch_size[0],  W // self.patch_size[1]
         # Pass the input tensor through the feature extraction process (patch embedding, positional embedding, etc.)
         x = self.forward_features(x)  # B, N_patches, E_dim
-
+        if self.use_time_embed:
+            x = x.view(B, 3, H_p, W_p, self.num_features)
+            x = x.permute(0, 2, 3, 1, 4)  #change to B, 36*36*, 3, num_features
+            # print('check x size', x.shape)
+            x = x.flatten(3)
+            # print('check x size', x.shape)
+            x = x.permute(0, 3, 1, 2)
+            x = x.flatten(2)             # B, 3*num_features, 36*36
+            x = x.permute(0, 2, 1)
+        # print('check before head x size', x.shape)
         # Pass the features through the head (e.g., a classifier or a linear layer)
-        x = self.head(x)  # B, N_patches, Original_channels * Patch_size * Patch_size
-
+        x = self.head(x)  # B, N_patches, Original_channels * Patch_size * Patch_size     or * 3
+        # print('check x size', x.shape)
         # Convert the sequence back to image-like format (reconstruct the image from patch sequence)
         x = self.seq2img(
-            x, (H, W)
-        )  # Reconstruct the image to original height and width
+                x, (H, W)
+            )
+        # print('check x size', x.shape)
+        # if not self.use_time_embed:
+        #     x = self.seq2img(
+        #         x, (H, W)
+        #     )  # Reconstruct the image to original height and width
+        # else:
+
 
         # Return the reconstructed image
         return x

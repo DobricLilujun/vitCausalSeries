@@ -8,8 +8,8 @@ from .vision_transformer_time_series_formalized_with_SAR import (
     VisionTransformerTimeSeriesFormalizedWithSAR,
 )
 
-from .vision_transformer_time_series_formalized_with_SAR_CLS import (
-    VisionTransformerTimeSeriesFormalizedWithSARCLS,
-    Classifier,
-)
+# from .vision_transformer_time_series_formalized_with_SAR_CLS import (
+#     VisionTransformerTimeSeriesFormalizedWithSARCLS,
+#     Classifier,
+# )
 from .unet import Unet

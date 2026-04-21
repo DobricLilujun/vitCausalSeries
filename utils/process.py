@@ -9,6 +9,7 @@ def RealisticCloudMaskFunc(
     input: torch.tensor,
     seed: Optional[Union[int, Tuple[int, ...]]] = None,
     clouds_attributes: Optional[Dict[str, Any]] = None,
+    if_SAR = False
 ):
 
     clouds_attributes = clouds_attributes or {}
@@ -18,7 +19,7 @@ def RealisticCloudMaskFunc(
     threshold = clouds_attributes.get("threshold", 0.5)  # Default to 0.5
     blur = clouds_attributes.get("blur", 0.0)  # Default to 0.0
     cloud_size = clouds_attributes.get("cloud_size", 0.3)  # Default to 0.3
-    cloud_count = clouds_attributes.get("cloud_count", 10)  # Default to 10
+    cloud_count = clouds_attributes.get("cloud_count", 20)  # Default to 10
 
     if len(input.shape) != 3:
         raise ValueError("Shape should have 4 dimensions: [channels, height, width]")
@@ -56,7 +57,19 @@ def RealisticCloudMaskFunc(
 
     mask = 1 - mask
     # Expand the mask to match the batch and channel dimensions
-    mask_to_apply = np.tile(mask, (channels, 1, 1))
+    if not if_SAR:
+        mask_to_apply = np.tile(mask, (channels, 1, 1))
+    else:
+        mask_to_apply = []
+        for band in range(channels):
+            # 标号+1能被12或13整除 —— SAR 波段，不用 mask
+            if ((band + 1) % 12 == 0) or ((band + 1) % 13 == 0):
+                band_mask = np.ones((mask.shape[0], mask.shape[1]), dtype=np.float32) # 不遮盖
+            else:
+                band_mask = mask.copy()  # 应用遮盖
+            mask_to_apply.append(band_mask)
+        mask_to_apply = np.stack(mask_to_apply, axis=0)
+            
 
     # Convert mask to tensor
     mask_to_apply = torch.tensor(mask_to_apply, dtype=torch.float32)

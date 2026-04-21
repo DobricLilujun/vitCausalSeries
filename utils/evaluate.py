@@ -56,6 +56,41 @@ def ssim(
 
     return ssim / gt.shape[0]
 
+import numpy as np
+
+def sam_loss(gt: np.ndarray, pred: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """
+    Compute Spectral Angle Mapper (SAM) loss.
+
+    Expected shapes:
+    - gt, pred: [..., C] 或 [C, H, W] / [B, C, H, W] 等，只要能在最后一个维度上做通道/光谱维计算即可。
+      下面实现将通道维放到最后再计算。
+
+    Returns:
+    - 标量：所有像素/样本的光谱夹角（单位：弧度）平均值，数值越小越好。
+    """
+    # 将通道维移到最后一维，方便广播计算
+    if gt.ndim >= 3 and gt.shape[0] <= 4 and gt.shape[0] == pred.shape[0]:
+        # 常见格式 [C,H,W] 或 [B,C,H,W]：把 C 轴移到最后
+        axes = list(range(gt.ndim))
+        gt = np.moveaxis(gt, 0 if gt.ndim == 3 else 1, -1)
+        pred = np.moveaxis(pred, 0 if pred.ndim == 3 else 1, -1)
+    # 现在 gt, pred 的最后一维是通道 C
+
+    # 计算点积与范数
+    dot = np.sum(gt * pred, axis=-1)                               # [...,]
+    ngt = np.sqrt(np.sum(gt * gt, axis=-1))                        # [...,]
+    npred = np.sqrt(np.sum(pred * pred, axis=-1))                  # [...,]
+
+    # 余弦与裁剪（数值稳定）
+    cos_sim = dot / (ngt * npred + eps)                            # [...,]
+    cos_sim = np.clip(cos_sim, -1.0, 1.0)
+
+    # 夹角（弧度），并在所有位置上取均值
+    angle = np.arccos(cos_sim)                                     # [...,]
+    return angle.mean()
+
+
 
 METRIC_FUNCS = dict(
     MSE=mse,
@@ -105,11 +140,11 @@ def evaluate(args, recons_key):
         with h5py.File(tgt_file, "r") as target, h5py.File(
             args.predictions_path / tgt_file.name, "r"
         ) as recons:
-            if args.acquisition and args.acquisition != target.attrs["acquisition"]:
-                continue
+            # if args.acquisition and args.acquisition != target.attrs["acquisition"]:
+            #     continue
 
-            if args.acceleration and target.attrs["acceleration"] != args.acceleration:
-                continue
+            # if args.acceleration and target.attrs["acceleration"] != args.acceleration:
+            #     continue
 
             target = target[recons_key][()]
             recons = recons["reconstruction"][()]
@@ -144,22 +179,22 @@ if __name__ == "__main__":
         required=True,
         help="Which challenge",
     )
-    parser.add_argument("--acceleration", type=int, default=None)
-    parser.add_argument(
-        "--acquisition",
-        choices=[
-            "CORPD_FBK",
-            "CORPDFS_FBK",
-            "AXT1",
-            "AXT1PRE",
-            "AXT1POST",
-            "AXT2",
-            "AXFLAIR",
-        ],
-        default=None,
-        help="If set, only volumes of the specified acquisition type are used "
-        "for evaluation. By default, all volumes are included.",
-    )
+    # parser.add_argument("--acceleration", type=int, default=None)
+    # parser.add_argument(
+    #     "--acquisition",
+    #     choices=[
+    #         "CORPD_FBK",
+    #         "CORPDFS_FBK",
+    #         "AXT1",
+    #         "AXT1PRE",
+    #         "AXT1POST",
+    #         "AXT2",
+    #         "AXFLAIR",
+    #     ],
+    #     default=None,
+    #     help="If set, only volumes of the specified acquisition type are used "
+    #     "for evaluation. By default, all volumes are included.",
+    # )
     args = parser.parse_args()
 
     recons_key = (
